@@ -1,4 +1,5 @@
 # 🐦 Flappy Bird + MediaPipe
+Ignacio Wuilloud
 
 Un clon de **Flappy Bird** jugado completamente con el cuerpo: **aletea los brazos** frente a la cámara y el pájaro vuela. Sin teclado, sin mouse.
 
