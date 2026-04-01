@@ -1,0 +1,896 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Flappy Bird · MediaPipe Jump Detection</title>
+  <meta name="description" content="Flappy Bird controlado con tu cuerpo. Salta frente a la cámara para hacer volar al pájaro." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #1a1a2e;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      font-family: 'Press Start 2P', monospace;
+      overflow: hidden;
+    }
+
+    /* ── Layout ── */
+    #layout {
+      display: flex;
+      gap: 20px;
+      align-items: flex-start;
+      max-width: 1200px;
+      width: 100%;
+      padding: 16px;
+    }
+
+    /* ── Game container ── */
+    #game-wrap {
+      position: relative;
+      flex-shrink: 0;
+    }
+
+    #gameCanvas {
+      display: block;
+      border-radius: 12px;
+      box-shadow: 0 0 40px rgba(79,195,247,0.3), 0 0 80px rgba(79,195,247,0.1);
+      image-rendering: pixelated;
+    }
+
+    /* ── Camera panel ── */
+    #camera-panel {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      min-width: 280px;
+    }
+
+    .panel-card {
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 16px;
+      padding: 16px;
+      backdrop-filter: blur(8px);
+    }
+
+    .panel-card h3 {
+      font-size: 9px;
+      color: #4fc3f7;
+      margin-bottom: 12px;
+      letter-spacing: 1px;
+    }
+
+    /* Camera feed */
+    #cam-container {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 4/3;
+      border-radius: 10px;
+      overflow: hidden;
+      background: #000;
+    }
+
+    #camVideo {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      transform: scaleX(-1); /* mirror */
+      display: block;
+    }
+
+    #poseCanvas {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%;
+      height: 100%;
+      transform: scaleX(-1);
+    }
+
+    /* Status indicator */
+    #status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #ef5350;
+      display: inline-block;
+      margin-right: 8px;
+      animation: pulse-red 1.5s infinite;
+    }
+    #status-dot.active {
+      background: #66bb6a;
+      animation: pulse-green 1.5s infinite;
+    }
+    #status-dot.jump {
+      background: #ffee58;
+      animation: none;
+    }
+
+    @keyframes pulse-red   { 0%,100%{box-shadow:0 0 0 0 rgba(239,83,80,.6)} 50%{box-shadow:0 0 0 6px rgba(239,83,80,0)} }
+    @keyframes pulse-green { 0%,100%{box-shadow:0 0 0 0 rgba(102,187,106,.6)} 50%{box-shadow:0 0 0 6px rgba(102,187,106,0)} }
+
+    #status-text { font-size: 8px; color: #ccc; }
+
+    /* Jump indicator */
+    #jump-indicator {
+      text-align: center;
+      padding: 10px;
+      border-radius: 10px;
+      background: rgba(255,238,88,0);
+      border: 1px solid rgba(255,238,88,0);
+      transition: all 0.15s ease;
+      font-size: 8px;
+      color: transparent;
+    }
+    #jump-indicator.active {
+      background: rgba(255,238,88,0.15);
+      border-color: rgba(255,238,88,0.5);
+      color: #ffee58;
+    }
+
+    /* Stats */
+    .stat-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 6px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+      font-size: 8px;
+    }
+    .stat-row:last-child { border-bottom: none; }
+    .stat-label { color: #888; }
+    .stat-value { color: #fff; }
+
+    /* Instructions */
+    .instruction {
+      font-size: 7px;
+      color: #666;
+      line-height: 1.8;
+    }
+    .instruction span { color: #4fc3f7; }
+
+    /* Loading overlay */
+    #loading-overlay {
+      position: fixed;
+      inset: 0;
+      background: #1a1a2e;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      gap: 20px;
+      z-index: 100;
+    }
+    #loading-overlay h1 {
+      font-size: 18px;
+      color: #4fc3f7;
+      text-shadow: 0 0 20px #4fc3f7;
+    }
+    #loading-bar-wrap {
+      width: 300px;
+      height: 8px;
+      background: rgba(255,255,255,0.1);
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    #loading-bar {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, #4fc3f7, #7c4dff);
+      border-radius: 4px;
+      transition: width 0.3s;
+    }
+    #loading-msg { font-size: 8px; color: #888; }
+  </style>
+</head>
+<body>
+
+<!-- Loading -->
+<div id="loading-overlay">
+  <h1>🐦 FLAPPY BIRD</h1>
+  <div id="loading-bar-wrap"><div id="loading-bar"></div></div>
+  <div id="loading-msg">Cargando MediaPipe…</div>
+</div>
+
+<!-- Main layout -->
+<div id="layout">
+
+  <!-- Game -->
+  <div id="game-wrap">
+    <canvas id="gameCanvas" width="288" height="512"></canvas>
+  </div>
+
+  <!-- Camera panel -->
+  <div id="camera-panel">
+
+    <div class="panel-card">
+      <h3>📷 CÁMARA</h3>
+      <div id="cam-container">
+        <video id="camVideo" autoplay playsinline muted></video>
+        <canvas id="poseCanvas"></canvas>
+      </div>
+      <div style="margin-top:10px; display:flex; align-items:center;">
+        <span id="status-dot"></span>
+        <span id="status-text">Iniciando cámara…</span>
+      </div>
+    </div>
+
+    <div class="panel-card">
+      <h3>⚡ DETECCIÓN</h3>
+      <div id="jump-indicator">🐦 ¡ALETEO DETECTADO!</div>
+    </div>
+
+    <div class="panel-card">
+      <h3>📊 STATS</h3>
+      <div class="stat-row">
+        <span class="stat-label">Puntuación</span>
+        <span class="stat-value" id="stat-score">0</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-label">Mejor</span>
+        <span class="stat-value" id="stat-best">0</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-label">Saltos</span>
+        <span class="stat-value" id="stat-jumps">0</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-label">FPS Pose</span>
+        <span class="stat-value" id="stat-fps">-</span>
+      </div>
+    </div>
+
+    <div class="panel-card">
+      <h3>ℹ️ CÓMO JUGAR</h3>
+      <p class="instruction">
+        1. <span>Posicionáte</span> frente a la cámara<br/>
+        2. <span>Aletea los brazos</span> hacia arriba<br/>
+        3. El pájaro vuela cuando subís las <span>muñecas</span>✨<br/>
+        4. Evitá los <span>caños</span><br/>
+        5. También podés usar <span>ESPACIO</span>
+      </p>
+    </div>
+
+  </div>
+</div>
+
+<!-- MediaPipe loaded dynamically as ES module inside initMediaPipe() -->
+
+<script type="module">
+'use strict';
+
+// ─────────────────────────────────────────────
+//  CONSTANTS & ASSET URLS
+// ─────────────────────────────────────────────
+const RAW = 'https://raw.githubusercontent.com/samuelcust/flappy-bird-assets/master';
+
+const ASSETS = {
+  bg:        `${RAW}/sprites/background-day.png`,
+  base:      `${RAW}/sprites/base.png`,
+  pipeGreen: `${RAW}/sprites/pipe-green.png`,
+  gameover:  `${RAW}/sprites/gameover.png`,
+  message:   `${RAW}/sprites/message.png`,
+  bird0:     `${RAW}/sprites/yellowbird-upflap.png`,
+  bird1:     `${RAW}/sprites/yellowbird-midflap.png`,
+  bird2:     `${RAW}/sprites/yellowbird-downflap.png`,
+  nums: [...Array(10)].map((_,i) => `${RAW}/sprites/${i}.png`),
+  sfxWing:   `${RAW}/audio/wing.ogg`,
+  sfxHit:    `${RAW}/audio/hit.ogg`,
+  sfxPoint:  `${RAW}/audio/point.ogg`,
+  sfxDie:    `${RAW}/audio/die.ogg`,
+};
+
+// Game dims (classic Flappy Bird)
+const W = 288, H = 512;
+const GROUND_Y = 400;          // y where base starts
+const BASE_H   = H - GROUND_Y; // 112px
+
+// Physics
+const GRAVITY   = 0.25;
+const FLAP_VEL  = -4.5;
+const PIPE_GAP  = 120;         // vertical gap between pipes (+20%)
+const PIPE_VEL  = 2;
+const PIPE_FREQ = 90;          // frames between pipe spawns
+
+// Pose detection — flap gesture (wrists moving UP)
+const JUMP_THRESHOLD   = 0.05; // wrist Y delta (normalized) to trigger flap
+const JUMP_COOLDOWN_MS = 0;    // min ms between flaps (0 = no cooldown)
+
+// ─────────────────────────────────────────────
+//  STATE
+// ─────────────────────────────────────────────
+let imgs   = {};
+let sounds = {};
+let numImgs = [];
+
+let gameState  = 'waiting'; // 'waiting' | 'playing' | 'dead'
+let score      = 0;
+let bestScore  = parseInt(localStorage.getItem('fb_best') || '0');
+let totalJumps = 0;
+
+let bird, pipes, baseX, frameCount;
+let poseFps = 0, poseFrameTs = 0, poseFrameCount = 0;
+
+// ─────────────────────────────────────────────
+//  CANVAS
+// ─────────────────────────────────────────────
+const canvas  = document.getElementById('gameCanvas');
+const ctx     = canvas.getContext('2d');
+
+const poseCanvas = document.getElementById('poseCanvas');
+const poseCtx    = poseCanvas.getContext('2d');
+
+// ─────────────────────────────────────────────
+//  LOADING
+// ─────────────────────────────────────────────
+function setLoading(pct, msg) {
+  document.getElementById('loading-bar').style.width = pct + '%';
+  document.getElementById('loading-msg').textContent  = msg;
+}
+
+function loadImage(src) {
+  return new Promise((res, rej) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload  = () => res(img);
+    img.onerror = () => rej(new Error('Failed: ' + src));
+    img.src = src;
+  });
+}
+
+function loadAudio(src) {
+  return new Promise((res) => {
+    const a = new Audio();
+    a.crossOrigin = 'anonymous';
+    a.src = src;
+    a.oncanplaythrough = () => res(a);
+    a.onerror = () => res(null); // audio optional
+    a.load();
+  });
+}
+
+async function loadAllAssets() {
+  const total = 16;
+  let loaded  = 0;
+  const tick  = () => { loaded++; setLoading(10 + (loaded/total)*50, `Cargando sprites… (${loaded}/${total})`); };
+
+  [imgs.bg, imgs.base, imgs.pipeGreen, imgs.gameover, imgs.message,
+   imgs.bird0, imgs.bird1, imgs.bird2] =
+    await Promise.all([
+      loadImage(ASSETS.bg).then(i=>{tick();return i;}),
+      loadImage(ASSETS.base).then(i=>{tick();return i;}),
+      loadImage(ASSETS.pipeGreen).then(i=>{tick();return i;}),
+      loadImage(ASSETS.gameover).then(i=>{tick();return i;}),
+      loadImage(ASSETS.message).then(i=>{tick();return i;}),
+      loadImage(ASSETS.bird0).then(i=>{tick();return i;}),
+      loadImage(ASSETS.bird1).then(i=>{tick();return i;}),
+      loadImage(ASSETS.bird2).then(i=>{tick();return i;}),
+    ]);
+
+  numImgs = await Promise.all(ASSETS.nums.map(src => loadImage(src).then(i=>{tick();return i;})));
+  // 8 img + 10 nums - wait they are not all 18, let me just pass 16 steps
+  // Sounds (best-effort)
+  [sounds.wing, sounds.hit, sounds.point, sounds.die] = await Promise.all([
+    loadAudio(ASSETS.sfxWing),
+    loadAudio(ASSETS.sfxHit),
+    loadAudio(ASSETS.sfxPoint),
+    loadAudio(ASSETS.sfxDie),
+  ]);
+}
+
+function playSound(snd) {
+  if (!snd) return;
+  try {
+    const clone = snd.cloneNode();
+    clone.volume = 0.5;
+    clone.play().catch(()=>{});
+  } catch(e) {}
+}
+
+// ─────────────────────────────────────────────
+//  BIRD
+// ─────────────────────────────────────────────
+function createBird() {
+  return {
+    x: 50,
+    y: H / 2 - 10,
+    vy: 0,
+    frame: 0,
+    frameTick: 0,
+    angle: 0,
+  };
+}
+
+function updateBird() {
+  bird.vy += GRAVITY;
+  bird.y  += bird.vy;
+
+  // Animate wings
+  bird.frameTick++;
+  if (bird.frameTick >= 5) { bird.frame = (bird.frame + 1) % 3; bird.frameTick = 0; }
+
+  // Tilt
+  const targetAngle = bird.vy < 0
+    ? Math.max(-25, bird.vy * 3)
+    : Math.min(90,   bird.vy * 5);
+  bird.angle += (targetAngle - bird.angle) * 0.2;
+
+  // Ground collision
+  if (bird.y + 12 >= GROUND_Y) {
+    bird.y = GROUND_Y - 12;
+    bird.vy = 0;
+    return true; // dead
+  }
+  // Ceiling
+  if (bird.y - 12 <= 0) { bird.y = 12; bird.vy = 0; }
+
+  return false;
+}
+
+function drawBird() {
+  const sprites = [imgs.bird0, imgs.bird1, imgs.bird2];
+  const img = sprites[bird.frame];
+  const bw = 34, bh = 24;
+  ctx.save();
+  ctx.translate(bird.x, bird.y);
+  ctx.rotate(bird.angle * Math.PI / 180);
+  ctx.drawImage(img, -bw/2, -bh/2, bw, bh);
+  ctx.restore();
+}
+
+function flap() {
+  if (gameState === 'dead') return;
+  if (gameState === 'waiting') startGame();
+  bird.vy = FLAP_VEL;
+  playSound(sounds.wing);
+  totalJumps++;
+  document.getElementById('stat-jumps').textContent = totalJumps;
+  showJumpIndicator();
+}
+
+// ─────────────────────────────────────────────
+//  PIPES
+// ─────────────────────────────────────────────
+function createPipe() {
+  const minTop = 50, maxTop = GROUND_Y - PIPE_GAP - 50;
+  const topH   = Math.floor(Math.random() * (maxTop - minTop + 1)) + minTop;
+  return {
+    x:    W,
+    topH: topH,
+    botY:  topH + PIPE_GAP,
+    botH:  GROUND_Y - (topH + PIPE_GAP),
+    scored: false,
+  };
+}
+
+const PIPE_W = 52;
+
+function drawPipes() {
+  for (const p of pipes) {
+    // top pipe (flipped)
+    ctx.save();
+    ctx.translate(p.x + PIPE_W/2, p.topH/2);
+    ctx.scale(1, -1);
+    ctx.drawImage(imgs.pipeGreen, -PIPE_W/2, -p.topH/2, PIPE_W, p.topH);
+    ctx.restore();
+
+    // bottom pipe
+    ctx.drawImage(imgs.pipeGreen, p.x, p.botY, PIPE_W, p.botH);
+  }
+}
+
+function updatePipes() {
+  if (frameCount % PIPE_FREQ === 0) pipes.push(createPipe());
+  for (const p of pipes) p.x -= PIPE_VEL;
+  // remove off-screen
+  while (pipes.length && pipes[0].x + PIPE_W < 0) pipes.shift();
+}
+
+// ─────────────────────────────────────────────
+//  COLLISION
+// ─────────────────────────────────────────────
+function checkCollision() {
+  const bx = bird.x - 14, by = bird.y - 10, bw2 = 28, bh2 = 20;
+  for (const p of pipes) {
+    const inX = bx + bw2 > p.x + 2 && bx < p.x + PIPE_W - 2;
+    if (inX) {
+      if (by < p.topH - 2 || by + bh2 > p.botY + 2) return true;
+    }
+  }
+  return false;
+}
+
+function checkScore() {
+  for (const p of pipes) {
+    if (!p.scored && p.x + PIPE_W < bird.x) {
+      p.scored = true;
+      score++;
+      document.getElementById('stat-score').textContent = score;
+      playSound(sounds.point);
+      if (score > bestScore) {
+        bestScore = score;
+        localStorage.setItem('fb_best', bestScore);
+        document.getElementById('stat-best').textContent = bestScore;
+      }
+    }
+  }
+}
+
+// ─────────────────────────────────────────────
+//  DRAWING
+// ─────────────────────────────────────────────
+function drawBackground() {
+  ctx.drawImage(imgs.bg, 0, 0, W, H);
+}
+
+function drawBase() {
+  const bw = imgs.base.width;
+  const drawX = -(baseX % bw);
+  ctx.drawImage(imgs.base, drawX,       GROUND_Y, bw, BASE_H);
+  ctx.drawImage(imgs.base, drawX + bw,  GROUND_Y, bw, BASE_H);
+}
+
+function drawScore() {
+  const s     = String(score);
+  const numW  = 24, numH = 36;
+  const gap   = 4;
+  const total = s.length * (numW + gap) - gap;
+  let sx      = (W - total) / 2;
+  for (const ch of s) {
+    ctx.drawImage(numImgs[+ch], sx, 24, numW, numH);
+    sx += numW + gap;
+  }
+}
+
+function drawMessage() {
+  const mw = 184, mh = 267;
+  ctx.drawImage(imgs.message, (W - mw)/2, (H - mh)/2 - 30, mw, mh);
+}
+
+function drawGameOver() {
+  const gw = 192, gh = 42;
+  ctx.drawImage(imgs.gameover, (W - gw)/2, H/2 - 60, gw, gh);
+  // score panel
+  ctx.fillStyle = 'rgba(0,0,0,0.45)';
+  ctx.roundRect((W-180)/2, H/2 - 10, 180, 70, 10);
+  ctx.fill();
+  ctx.fillStyle = '#fff';
+  ctx.font = '8px "Press Start 2P"';
+  ctx.textAlign = 'left';
+  ctx.fillText('SCORE', (W-160)/2 + 6, H/2 + 14);
+  ctx.fillText('BEST',  (W-160)/2 + 6, H/2 + 40);
+  ctx.textAlign = 'right';
+  ctx.fillText(score,     (W+160)/2 - 6, H/2 + 14);
+  ctx.fillText(bestScore, (W+160)/2 - 6, H/2 + 40);
+  ctx.textAlign = 'start';
+  // restart hint
+  ctx.fillStyle = 'rgba(255,255,255,0.7)';
+  ctx.font = '7px "Press Start 2P"';
+  ctx.textAlign = 'center';
+  ctx.fillText('SALTA PARA REINICIAR', W/2, H/2 + 86);
+  ctx.textAlign = 'start';
+}
+
+// ─────────────────────────────────────────────
+//  GAME STATES
+// ─────────────────────────────────────────────
+function initGame() {
+  bird      = createBird();
+  pipes     = [];
+  baseX     = 0;
+  frameCount = 0;
+  score      = 0;
+  document.getElementById('stat-score').textContent = '0';
+}
+
+function startGame() {
+  gameState = 'playing';
+}
+
+function killBird() {
+  if (gameState === 'dead') return;
+  gameState = 'dead';
+  playSound(sounds.hit);
+  setTimeout(() => playSound(sounds.die), 300);
+  if (score > bestScore) {
+    bestScore = score;
+    localStorage.setItem('fb_best', bestScore);
+    document.getElementById('stat-best').textContent = bestScore;
+  }
+}
+
+// ─────────────────────────────────────────────
+//  MAIN LOOP
+// ─────────────────────────────────────────────
+function gameLoop() {
+  ctx.clearRect(0, 0, W, H);
+  drawBackground();
+
+  if (gameState === 'waiting') {
+    drawBird();
+    drawBase();
+    drawMessage();
+  }
+
+  else if (gameState === 'playing') {
+    frameCount++;
+    baseX += PIPE_VEL;
+
+    updatePipes();
+    const hitGround = updateBird();
+
+    if (hitGround || checkCollision()) {
+      killBird();
+    } else {
+      checkScore();
+    }
+
+    drawPipes();
+    drawBird();
+    drawBase();
+    drawScore();
+  }
+
+  else if (gameState === 'dead') {
+    drawPipes();
+    drawBird();
+    drawBase();
+    drawScore();
+    drawGameOver();
+  }
+
+  requestAnimationFrame(gameLoop);
+}
+
+// ─────────────────────────────────────────────
+//  INPUT (keyboard fallback)
+// ─────────────────────────────────────────────
+window.addEventListener('keydown', e => {
+  if (e.code === 'Space' || e.code === 'ArrowUp') {
+    e.preventDefault();
+    if (gameState === 'dead') { initGame(); gameState = 'waiting'; return; }
+    flap();
+  }
+});
+canvas.addEventListener('click', () => {
+  if (gameState === 'dead') { initGame(); gameState = 'waiting'; return; }
+  flap();
+});
+
+// ─────────────────────────────────────────────
+//  JUMP INDICATOR UI
+// ─────────────────────────────────────────────
+let jumpIndicatorTimeout = null;
+function showJumpIndicator() {
+  const el = document.getElementById('jump-indicator');
+  el.classList.add('active');
+  document.getElementById('status-dot').classList.add('jump');
+  clearTimeout(jumpIndicatorTimeout);
+  jumpIndicatorTimeout = setTimeout(() => {
+    el.classList.remove('active');
+    document.getElementById('status-dot').classList.remove('jump');
+  }, 400);
+}
+
+// ─────────────────────────────────────────────
+//  MEDIAPIPE POSE DETECTION
+// ─────────────────────────────────────────────
+let poseLandmarker  = null;
+let lastJumpTime    = 0;
+let prevWristY      = null;   // normalized avg of both wrists
+let wristHistory    = [];     // rolling window for smoothing
+const WRIST_WINDOW  = 4;      // smaller window = more responsive
+
+async function initMediaPipe() {
+  setLoading(62, 'Cargando MediaPipe Vision…');
+
+  // Dynamically import the ES module bundle (v0.10.34 only ships .mjs / .cjs)
+  const MEDIAPIPE_VERSION = '0.10.34';
+  const { PoseLandmarker, FilesetResolver } = await import(
+    `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MEDIAPIPE_VERSION}/vision_bundle.mjs`
+  );
+
+  setLoading(68, 'Inicializando modelo de pose…');
+
+  const vision = await FilesetResolver.forVisionTasks(
+    `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MEDIAPIPE_VERSION}/wasm`
+  );
+
+  poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
+    baseOptions: {
+      modelAssetPath:
+        'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task',
+      delegate: 'GPU',
+    },
+    runningMode:        'VIDEO',
+    numPoses:           1,
+    minPoseDetectionConfidence: 0.5,
+    minPosePresenceConfidence:  0.5,
+    minTrackingConfidence:      0.5,
+  });
+
+  setLoading(80, 'Accediendo a la cámara…');
+}
+
+async function startCamera() {
+  const video = document.getElementById('camVideo');
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { width: 640, height: 480, facingMode: 'user' },
+      audio: false,
+    });
+    video.srcObject = stream;
+    await new Promise(r => video.addEventListener('loadeddata', r, { once: true }));
+    document.getElementById('status-dot').classList.add('active');
+    document.getElementById('status-text').textContent = 'Cámara activa — ¡Listo!';
+  } catch (e) {
+    document.getElementById('status-text').textContent = 'Sin acceso a cámara';
+    console.warn('Camera error:', e);
+  }
+}
+
+// Draw pose skeleton on overlay canvas
+function drawPoseSkeleton(landmarks, vw, vh) {
+  poseCtx.clearRect(0, 0, poseCanvas.width, poseCanvas.height);
+
+  // Connections to draw (subset of pose)
+  const CONNECTIONS = [
+    [11,13],[13,15], // left arm
+    [12,14],[14,16], // right arm
+    [11,12],         // shoulders
+    [23,24],         // hips
+    [11,23],[12,24], // torso
+    [23,25],[25,27], // left leg
+    [24,26],[26,28], // right leg
+  ];
+
+  poseCtx.strokeStyle = 'rgba(79,195,247,0.7)';
+  poseCtx.lineWidth   = 2;
+
+  for (const [a, b] of CONNECTIONS) {
+    const la = landmarks[a], lb = landmarks[b];
+    if (!la || !lb) continue;
+    poseCtx.beginPath();
+    poseCtx.moveTo(la.x * poseCanvas.width, la.y * poseCanvas.height);
+    poseCtx.lineTo(lb.x * poseCanvas.width, lb.y * poseCanvas.height);
+    poseCtx.stroke();
+  }
+
+  // Keypoints — highlight wrists in yellow (they are the flap triggers)
+  for (let i = 0; i < landmarks.length; i++) {
+    const l = landmarks[i];
+    const isWrist = (i === 15 || i === 16);
+    poseCtx.beginPath();
+    poseCtx.arc(l.x * poseCanvas.width, l.y * poseCanvas.height, isWrist ? 6 : 3, 0, Math.PI * 2);
+    poseCtx.fillStyle = isWrist ? '#ffee58' : 'rgba(79,195,247,0.9)';
+    if (isWrist) {
+      // Outer ring for wrists
+      poseCtx.strokeStyle = 'rgba(255,238,88,0.5)';
+      poseCtx.lineWidth = 2;
+      poseCtx.stroke();
+      poseCtx.lineWidth = 2;
+    }
+    poseCtx.fill();
+  }
+}
+
+let lastVideoTime = -1;
+
+function poseDetectionLoop() {
+  const video = document.getElementById('camVideo');
+  if (!poseLandmarker || video.readyState < 2) {
+    requestAnimationFrame(poseDetectionLoop);
+    return;
+  }
+
+  // Sync overlay canvas size
+  if (poseCanvas.width !== video.videoWidth || poseCanvas.height !== video.videoHeight) {
+    poseCanvas.width  = video.videoWidth  || 640;
+    poseCanvas.height = video.videoHeight || 480;
+  }
+
+  const now = performance.now();
+
+  if (video.currentTime !== lastVideoTime) {
+    lastVideoTime = video.currentTime;
+    const result = poseLandmarker.detectForVideo(video, now);
+
+    // FPS counter
+    poseFrameCount++;
+    if (now - poseFrameTs > 1000) {
+      poseFps = poseFrameCount;
+      poseFrameCount = 0;
+      poseFrameTs = now;
+      document.getElementById('stat-fps').textContent = poseFps;
+    }
+
+    if (result.landmarks && result.landmarks.length > 0) {
+      const landmarks = result.landmarks[0];
+      drawPoseSkeleton(landmarks, video.videoWidth, video.videoHeight);
+      detectFlap(landmarks, now);
+    } else {
+      poseCtx.clearRect(0, 0, poseCanvas.width, poseCanvas.height);
+    }
+  }
+
+  requestAnimationFrame(poseDetectionLoop);
+}
+
+function detectFlap(landmarks, now) {
+  // Track wrists (15 = left, 16 = right) — upward movement = flap gesture
+  const lwrist = landmarks[15];
+  const rwrist = landmarks[16];
+  if (!lwrist || !rwrist) return;
+
+  // Average wrist Y (normalized 0-1, where 0 = top of frame)
+  const wristY = (lwrist.y + rwrist.y) / 2;
+
+  // Short rolling smoothing to reduce jitter without adding latency
+  wristHistory.push(wristY);
+  if (wristHistory.length > WRIST_WINDOW) wristHistory.shift();
+  const smoothWristY = wristHistory.reduce((a, b) => a + b, 0) / wristHistory.length;
+
+  if (prevWristY === null) { prevWristY = smoothWristY; return; }
+
+  // delta > 0 → wrists moved UP (Y decreased in normalized space)
+  const delta = prevWristY - smoothWristY;
+  prevWristY = smoothWristY;
+
+  // Flap detected: wrists moved up sharply
+  if (delta > JUMP_THRESHOLD && now - lastJumpTime > JUMP_COOLDOWN_MS) {
+    lastJumpTime = now;
+
+    if (gameState === 'dead') {
+      initGame();
+      gameState = 'waiting';
+    }
+    flap();
+  }
+}
+
+// ─────────────────────────────────────────────
+//  BOOT
+// ─────────────────────────────────────────────
+async function boot() {
+  try {
+    setLoading(5, 'Cargando sprites…');
+    await loadAllAssets();
+
+    setLoading(60, 'Preparando MediaPipe…');
+    await initMediaPipe();
+
+    setLoading(85, 'Iniciando cámara…');
+    await startCamera();
+
+    setLoading(100, '¡Listo!');
+
+    // Init game
+    document.getElementById('stat-best').textContent = bestScore;
+    initGame();
+
+    // Hide loader
+    await new Promise(r => setTimeout(r, 400));
+    const overlay = document.getElementById('loading-overlay');
+    overlay.style.transition = 'opacity 0.5s';
+    overlay.style.opacity = '0';
+    setTimeout(() => overlay.remove(), 500);
+
+    // Start loops
+    gameLoop();
+    poseDetectionLoop();
+
+  } catch (err) {
+    document.getElementById('loading-msg').textContent = '❌ Error: ' + err.message;
+    console.error(err);
+  }
+}
+
+boot();
+</script>
+</body>
+</html>
